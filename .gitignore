@@ -1,0 +1,69 @@
+# Object files
+*.o
+*.ko
+*.obj
+
+# Precompiled Headers
+*.gch
+*.pch
+
+# Libraries
+*.lib
+*.la
+*.lo
+
+# Shared objects (inc. Windows DLLs)
+*.dll
+*.so
+*.so.*
+*.dylib
+
+# Vim
+*.swp
+*.swo
+
+# ctags
+.tags
+
+# Executables
+*.exe
+*.out
+*.app
+*.i*86
+*.x86_64
+*.hex
+out
+*.elf*
+
+# Debug files
+*.dSYM/
+*.su
+.metadata/
+*.map
+.settings/language.settings.xml
+.settings/
+*.list
+/Debug/*
+# keep .elf
+
+# temproarily ignore pre-build bash script while making changes (so the commit keeps clean)
+# update_version.sh               
+
+/Program/version.h
+
+/Doxygen/*
+
+/.vscode
+*.pdf
+/Release/
+# Generated files
+.mxproject
+
+# UML files
+# *.puml
+
+# markdown documentation
+# *.md
+
+# local reference files
+/files_with_heartrate_enabled
