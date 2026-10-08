@@ -15,6 +15,26 @@
   * If no LICENSE file comes with this software, it is provided AS-IS.
   *
   ******************************************************************************
+  *
+  * ---------------------------------------------------------------------------
+  * MODIFIED BY FIXAPOSTURE AB
+  * ---------------------------------------------------------------------------
+  * Organisation:      Fixaposture AB
+  * Modified by:       Goran Nybom  <gnybom@gmail.com>
+  * Cortex extension:  GitHub Copilot
+  * First modified:    2026-10-08
+  * Project:           FixaSpine WB55 - BLE over UART
+  * Reference:         BLE_IMPLEMENTATION_PLAN_2026-10-03.md
+  *                    BLE_PHASE2_CODING_PLAN_2026-10-08.md
+  *
+  * Summary of changes: GATT service re-shaped from Tom's P2P LED/SWITCH demo
+  * into a NUS-style UART transport - NUS UUIDs, RX = write-without-response
+  * (READ dropped), TX = notify, characteristic max length widened 2 -> 153
+  * bytes, and negotiated ATT_MTU tracing added.
+  *
+  * All modifications are confined to USER CODE regions.
+  * See git history for per-change detail.
+  * ---------------------------------------------------------------------------
   */
 /* USER CODE END Header */
 

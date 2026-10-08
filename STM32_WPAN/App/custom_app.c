@@ -15,6 +15,27 @@
   * If no LICENSE file comes with this software, it is provided AS-IS.
   *
   ******************************************************************************
+  *
+  * ---------------------------------------------------------------------------
+  * MODIFIED BY FIXAPOSTURE AB
+  * ---------------------------------------------------------------------------
+  * Organisation:      Fixaposture AB
+  * Modified by:       Goran Nybom  <gnybom@gmail.com>
+  * Cortex extension:  GitHub Copilot
+  * First modified:    2026-10-08
+  * Project:           FixaSpine WB55 - BLE over UART
+  * Reference:         BLE_IMPLEMENTATION_PLAN_2026-10-03.md
+  *                    BLE_PHASE2_CODING_PLAN_2026-10-08.md
+  *
+  * Summary of changes: application behaviour changed from LED control /
+  * button notification to a transparent byte-passthrough echo. Bytes written
+  * to the NUS RX characteristic are buffered in the HCI event context and
+  * echoed back as TX notifications from the existing FreeRTOS notify thread.
+  * The Nucleo B1 button now sends a fixed test string.
+  *
+  * All modifications are confined to USER CODE regions.
+  * See git history for per-change detail.
+  * ---------------------------------------------------------------------------
   */
 /* USER CODE END Header */
 
