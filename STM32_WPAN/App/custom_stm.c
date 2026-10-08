@@ -23,7 +23,12 @@
 #include "custom_stm.h"
 
 /* USER CODE BEGIN Includes */
-
+/* PHASE 2: needed by the MTU / DLE tracing added below.
+ * app_common.h brings in app_conf.h (CFG_BLE_MAX_ATT_MTU) and dbg_trace.h
+ * brings in APP_DBG_MSG. Both are include-guarded, so this is safe even
+ * though common_blesvc.h already pulls most of the BLE stack headers. */
+#include "app_common.h"
+#include "dbg_trace.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -65,8 +70,16 @@ extern uint16_t Connection_Handle;
 /* USER CODE END PM */
 
 /* Private variables ---------------------------------------------------------*/
-uint16_t SizeLed_C = 2;
-uint16_t SizeSwitch_C = 2;
+/* PHASE 2 (item C2): widened from the demo's 2 bytes to the full notification
+ * payload. CFG_BLE_MAX_ATT_MTU = 156, and ATT notification overhead is 3 bytes
+ * (opcode + handle), so 153 is the largest payload that fits one PDU.
+ * These values are the *maximum* length passed to aci_gatt_add_char(); the
+ * characteristics are already declared CHAR_VALUE_LEN_VARIABLE, so shorter
+ * writes and shorter notifications remain legal. */
+#define CUSTOM_STM_MAX_PAYLOAD_LEN   153
+
+uint16_t SizeLed_C = CUSTOM_STM_MAX_PAYLOAD_LEN;      /* RX - phone writes here */
+uint16_t SizeSwitch_C = CUSTOM_STM_MAX_PAYLOAD_LEN;   /* TX - device notifies here */
 
 /**
  * START of Section BLE_DRIVER_CONTEXT
@@ -105,9 +118,25 @@ do {\
     uuid_struct[12] = uuid_12; uuid_struct[13] = uuid_13; uuid_struct[14] = uuid_14; uuid_struct[15] = uuid_15; \
 }while(0)
 
-#define COPY_MY_P2P_SERVER_UUID(uuid_struct)          COPY_UUID_128(uuid_struct,0x00,0x00,0xfe,0x40,0xcc,0x7a,0x48,0x2a,0x98,0x4a,0x7f,0x2e,0xd5,0xb3,0xe5,0x8f)
-#define COPY_MY_LED_CHAR_UUID(uuid_struct)    COPY_UUID_128(uuid_struct,0x00,0x00,0xfe,0x41,0x8e,0x22,0x45,0x41,0x9d,0x4c,0x21,0xed,0xae,0x82,0xed,0x19)
-#define COPY_MY_SWITCH_CHAR_UUID(uuid_struct)    COPY_UUID_128(uuid_struct,0x00,0x00,0xfe,0x42,0x8e,0x22,0x45,0x41,0x9d,0x4c,0x21,0xed,0xae,0x82,0xed,0x19)
+/* ============================================================================
+ * PHASE 2 (BLE_PHASE2_CODING_PLAN_2026-10-08.md, item C1)
+ *
+ * NUS-style (Nordic UART Service) UUIDs replace Tom's P2P/LED/SWITCH set.
+ *   Service : 6e400001-b5a3-f393-e0a9-e50e24dcca9e
+ *   RX      : 6e400002-b5a3-f393-e0a9-e50e24dcca9e  (phone -> device, write no resp)
+ *   TX      : 6e400003-b5a3-f393-e0a9-e50e24dcca9e  (device -> phone, notify)
+ *
+ * The macro NAMES are deliberately left as LED/SWITCH so that every existing
+ * call site, handle name and event opcode in this file and in custom_app.c
+ * continues to compile unchanged. Structurally: LED == RX, SWITCH == TX.
+ *
+ * Consequence: ST BLE Toolbox will no longer recognise the service. That is
+ * expected and is the proof that this change took effect. Use Kai Morich
+ * "Serial Bluetooth Terminal" (BLE mode) from here onward.
+ * ==========================================================================*/
+#define COPY_MY_P2P_SERVER_UUID(uuid_struct)     COPY_UUID_128(uuid_struct,0x6e,0x40,0x00,0x01,0xb5,0xa3,0xf3,0x93,0xe0,0xa9,0xe5,0x0e,0x24,0xdc,0xca,0x9e)
+#define COPY_MY_LED_CHAR_UUID(uuid_struct)       COPY_UUID_128(uuid_struct,0x6e,0x40,0x00,0x02,0xb5,0xa3,0xf3,0x93,0xe0,0xa9,0xe5,0x0e,0x24,0xdc,0xca,0x9e)
+#define COPY_MY_SWITCH_CHAR_UUID(uuid_struct)    COPY_UUID_128(uuid_struct,0x6e,0x40,0x00,0x03,0xb5,0xa3,0xf3,0x93,0xe0,0xa9,0xe5,0x0e,0x24,0xdc,0xca,0x9e)
 
 /* USER CODE BEGIN PF */
 
@@ -243,6 +272,26 @@ static SVCCTL_EvtAckStatus_t Custom_STM_Event_Handler(void *Event)
 
         /* USER CODE BEGIN BLECORE_EVT */
 
+        /* PHASE 2 (item A4) - record the ATT_MTU the central actually granted.
+         * CFG_BLE_MAX_ATT_MTU = 156 is only what we *offer*; phones routinely
+         * negotiate lower. The usable notification payload is MTU - 3. This
+         * figure is a Phase 6 input for file-transfer sizing, so it must be
+         * measured rather than assumed. */
+        case ACI_ATT_EXCHANGE_MTU_RESP_VSEVT_CODE:
+        {
+          aci_att_exchange_mtu_resp_event_rp0 *exchange_mtu_resp;
+          exchange_mtu_resp = (aci_att_exchange_mtu_resp_event_rp0 *)blecore_evt->data;
+          APP_DBG_MSG("\r\n** ATT MTU negotiated: %d  (max notification payload = %d bytes)\n",
+                      exchange_mtu_resp->Server_RX_MTU,
+                      (exchange_mtu_resp->Server_RX_MTU > 3) ? (exchange_mtu_resp->Server_RX_MTU - 3) : 0);
+          if (exchange_mtu_resp->Server_RX_MTU < CFG_BLE_MAX_ATT_MTU)
+          {
+            APP_DBG_MSG("   NOTE: below our offered %d - echoes longer than the\n", CFG_BLE_MAX_ATT_MTU);
+            APP_DBG_MSG("   negotiated payload will be truncated by the stack.\n");
+          }
+          break;
+        }
+
         /* USER CODE END BLECORE_EVT */
         default:
           /* USER CODE BEGIN EVT_DEFAULT */
@@ -256,6 +305,12 @@ static SVCCTL_EvtAckStatus_t Custom_STM_Event_Handler(void *Event)
       break; /* HCI_VENDOR_SPECIFIC_DEBUG_EVT_CODE */
 
       /* USER CODE BEGIN EVENT_PCKT_CASES*/
+
+    /* PHASE 2 note (item A4): the Data Length Extension trace does NOT belong
+     * here. svc_ctl.c only dispatches vendor-specific GATT events (0x0Cxx) to
+     * registered service handlers, so HCI_LE_META_EVT_CODE (0x3E) would never
+     * reach this switch. The DLE logging lives in SVCCTL_App_Notification()
+     * in app_ble_alt.c instead. */
 
       /* USER CODE END EVENT_PCKT_CASES*/
 
@@ -332,13 +387,16 @@ void SVCCTL_InitCustomSvc(void)
   }
 
   /**
-   *  My_LED_Char
+   *  My_LED_Char  ->  PHASE 2: this is now the NUS **RX** characteristic.
+   *  Item C3: CHAR_PROP_READ dropped - a UART RX pipe is write-only, and
+   *  leaving READ on it would let a client read back the last write, which is
+   *  not UART semantics.
    */
   COPY_MY_LED_CHAR_UUID(uuid.Char_UUID_128);
   ret = aci_gatt_add_char(CustomContext.CustomP2PsHdle,
                           UUID_TYPE_128, &uuid,
                           SizeLed_C,
-                          CHAR_PROP_READ | CHAR_PROP_WRITE_WITHOUT_RESP,
+                          CHAR_PROP_WRITE_WITHOUT_RESP,
                           ATTR_PERMISSION_NONE,
                           GATT_NOTIFY_ATTRIBUTE_WRITE,
                           0x10,
@@ -346,11 +404,11 @@ void SVCCTL_InitCustomSvc(void)
                           &(CustomContext.CustomLed_CHdle));
   if (ret != BLE_STATUS_SUCCESS)
   {
-    APP_DBG_MSG("  Fail   : aci_gatt_add_char command   : LED_C, error code: 0x%x \n\r", ret);
+    APP_DBG_MSG("  Fail   : aci_gatt_add_char command   : NUS RX, error code: 0x%x \n\r", ret);
   }
   else
   {
-    APP_DBG_MSG("  Success: aci_gatt_add_char command   : LED_C , handle = 0x%04x \n\r", CustomContext.CustomLed_CHdle);
+    APP_DBG_MSG("  Success: aci_gatt_add_char command   : NUS RX , handle = 0x%04x , maxlen = %d \n\r", CustomContext.CustomLed_CHdle, SizeLed_C);
   }
 
   /* USER CODE BEGIN SVCCTL_Init_Service1_Char1 */
@@ -358,7 +416,7 @@ void SVCCTL_InitCustomSvc(void)
 
   /* USER CODE END SVCCTL_Init_Service1_Char1 */
   /**
-   *  MY_Switch_Char
+   *  MY_Switch_Char  ->  PHASE 2: this is now the NUS **TX** characteristic.
    */
   COPY_MY_SWITCH_CHAR_UUID(uuid.Char_UUID_128);
   ret = aci_gatt_add_char(CustomContext.CustomP2PsHdle,
@@ -372,11 +430,11 @@ void SVCCTL_InitCustomSvc(void)
                           &(CustomContext.CustomSwitch_CHdle));
   if (ret != BLE_STATUS_SUCCESS)
   {
-    APP_DBG_MSG("  Fail   : aci_gatt_add_char command   : SWITCH_C, error code: 0x%x \n\r", ret);
+    APP_DBG_MSG("  Fail   : aci_gatt_add_char command   : NUS TX, error code: 0x%x \n\r", ret);
   }
   else
   {
-    APP_DBG_MSG("  Success: aci_gatt_add_char command   : SWITCH_C , handle = 0x%04x \n\r", CustomContext.CustomSwitch_CHdle);
+    APP_DBG_MSG("  Success: aci_gatt_add_char command   : NUS TX , handle = 0x%04x , maxlen = %d \n\r", CustomContext.CustomSwitch_CHdle, SizeSwitch_C);
   }
 
   /* USER CODE BEGIN SVCCTL_Init_Service1_Char2 */
