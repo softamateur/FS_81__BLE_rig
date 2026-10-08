@@ -43,12 +43,30 @@ typedef struct
   /* My_P2P_Server */
   uint8_t               Switch_c_Notification_Status;
   /* USER CODE BEGIN CUSTOM_APP_Context_t */
-  
+
   // ============================
   // From custom service example: https://wiki.st.com/stm32mcu/wiki/Connectivity:STM32WB_BLE_STM32CubeMX
   uint8_t               SW1_Status;                      /* Code Line to add */
   // ============================
-  
+
+  /* PHASE 2 (BLE_PHASE2_CODING_PLAN_2026-10-08.md) - echo buffer.
+   *
+   * Hand-off discipline, because these two fields are touched from two
+   * different contexts:
+   *   WRITER : Custom_STM_App_Notification(), running in the HCI user-event
+   *            thread context, fills EchoBuf then EchoLen, then signals.
+   *   READER : Custom_Switch_c_Send_Notification() task, wakes on the flag and
+   *            consumes EchoLen then EchoBuf.
+   * Order is always write-payload -> write-length -> signal, so the reader can
+   * never observe a length that is larger than the bytes actually present.
+   * A single buffer is sufficient here: BLE write-without-response from one
+   * central is not pipelined faster than the notify task drains it at this
+   * MTU, and an overrun merely overwrites an un-echoed line rather than
+   * corrupting one. A ring buffer is a Phase 3 concern, not a Phase 2 one.
+   */
+  uint8_t               EchoBuf[CUSTOM_APP_ECHO_BUF_SIZE];
+  volatile uint8_t      EchoLen;
+
   /* USER CODE END CUSTOM_APP_Context_t */
 
   uint16_t              ConnectionHandle;
@@ -60,6 +78,15 @@ typedef struct
 
 /* Private defines ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
+
+/* PHASE 2: largest payload that fits one notification PDU at
+ * CFG_BLE_MAX_ATT_MTU = 156 (MTU - 3 bytes of ATT overhead).
+ * Must track CUSTOM_STM_MAX_PAYLOAD_LEN in custom_stm.c. */
+#define CUSTOM_APP_ECHO_BUF_SIZE      153
+
+/* Text sent when the Nucleo B1 button is pressed - lets us prove the TX path
+ * without a phone attached. */
+#define CUSTOM_APP_BUTTON_TEST_STRING "FixaSpine BLE TX test\r\n"
 
 /* USER CODE END PD */
 
@@ -116,20 +143,49 @@ void Custom_STM_App_Notification(Custom_STM_App_Notification_evt_t *pNotificatio
 
     case CUSTOM_STM_LED_C_WRITE_NO_RESP_EVT:
       /* USER CODE BEGIN CUSTOM_STM_LED_C_WRITE_NO_RESP_EVT */
-      
-      // ============================
-      // From custom service example: https://wiki.st.com/stm32mcu/wiki/Connectivity:STM32WB_BLE_STM32CubeMX
-      APP_DBG_MSG("\r\n\r** CUSTOM_STM_LED_C_WRITE_NO_RESP_EVT \n");
-      APP_DBG_MSG("\r\n\r** Write Data: 0x%02X %02X \n", pNotification->DataTransfered.pPayload[0], pNotification->DataTransfered.pPayload[1]);
-      if(pNotification->DataTransfered.pPayload[1] == 0x01)
+
+      /* ====================================================================
+       * PHASE 2 (item A1) - NUS RX: byte passthrough.
+       *
+       * Tom's demo decoded byte[1] as an LED command. That is replaced by a
+       * transparent copy of whatever the central wrote, which is then echoed
+       * back as a TX notification by Custom_Switch_c_Send_Notification().
+       *
+       * The echo is deliberately NOT sent from here. This function runs in the
+       * HCI user-event context; calling aci_gatt_update_char_value() from
+       * inside a stack event callback is the classic re-entrancy trap on
+       * STM32WB. We hand off to the existing notify thread instead.
+       * ==================================================================== */
       {
-        BSP_LED_On(LED_BLUE);
+        uint8_t len = pNotification->DataTransfered.Length;
+
+        APP_DBG_MSG("\r\n** NUS RX: %d byte(s)\n", len);
+
+        if (len == 0)
+        {
+          APP_DBG_MSG("-- NUS RX: empty write, nothing to echo\n");
+          break;
+        }
+
+        /* Defensive clamp. The characteristic is declared with a maximum of
+         * CUSTOM_APP_ECHO_BUF_SIZE, so the stack should already enforce this,
+         * but a silent truncation is far better than a buffer overrun. */
+        if (len > CUSTOM_APP_ECHO_BUF_SIZE)
+        {
+          APP_DBG_MSG("-- NUS RX: %d bytes truncated to %d\n", len, CUSTOM_APP_ECHO_BUF_SIZE);
+          len = CUSTOM_APP_ECHO_BUF_SIZE;
+        }
+
+        /* Order matters - payload, then length, then signal. See the comment
+         * on EchoBuf/EchoLen in Custom_App_Context_t. */
+        memcpy(Custom_App_Context.EchoBuf, pNotification->DataTransfered.pPayload, len);
+        Custom_App_Context.EchoLen = len;
+
+        if (Custom_Switch_c_Send_NotificationId != NULL)
+        {
+          osThreadFlagsSet(Custom_Switch_c_Send_NotificationId, 1);
+        }
       }
-      if(pNotification->DataTransfered.pPayload[1] == 0x00)
-      {
-        BSP_LED_Off(LED_BLUE); 
-      } 
-      // ============================
 
       /* USER CODE END CUSTOM_STM_LED_C_WRITE_NO_RESP_EVT */
       break;
@@ -265,53 +321,61 @@ __USED void Custom_Switch_c_Update_Char(void) /* Property Read */
 void Custom_Switch_c_Send_Notification(void *argument) // task process
 {
   UNUSED(argument);               // CMSIS compatibility
-  uint8_t updateflag = 0;
 
   for(;;)
   {
      osThreadFlagsWait(1, osFlagsWaitAny, osWaitForever);     // wait on event, handle with this task thread
 
     /* USER CODE BEGIN Switch_c_NS_1*/
-    // ============================
-    // From custom service example: https://wiki.st.com/stm32mcu/wiki/Connectivity:STM32WB_BLE_STM32CubeMX
-    if (Custom_App_Context.Switch_c_Notification_Status)
+
+    /* ====================================================================
+     * PHASE 2 (item A2) - NUS TX: echo the bytes captured by the RX handler.
+     *
+     * Tom's button-toggle payload and the ST BLE Toolbox "first byte must be
+     * 0x01" workaround are both gone - they were artefacts of the P2P demo
+     * protocol and have no meaning for a transparent UART pipe.
+     * ==================================================================== */
     {
-      updateflag = 1;
+      uint8_t len = Custom_App_Context.EchoLen;
 
-      // ST BLE Toolbox error - it uses the first byte to send the alarm (which should be Device_Button_Selection as ButtonPressed in BLE_p2pServer).
-      // The app queries the wrong byte, but it works because the wrong byte (Device_Button_Selection) was always set to 1.
-      // However, in the below code (using an array instead of a struct) they were not setting the first element to 1. The (hack) fix is
-      // to do what is done in BLE_p2pServer by setting the first byte to 1. Now it works and "Button pressed" is displayed in the app:
+      Custom_App_Context.EchoLen = 0;   /* consume */
 
-      if (Custom_App_Context.SW1_Status == 0)
+      if (len == 0)
       {
-        Custom_App_Context.SW1_Status = 1;
-        // NotifyCharData[0] = 0x00;                                 
-        NotifyCharData[0] = 0x01;     // (fix to match BLE_p2pServer)
-        NotifyCharData[1] = 0x01;      
+        /* Woken with nothing to send - e.g. a spurious signal. */
+        APP_DBG_MSG("-- NUS TX: woken with empty buffer, nothing to send\n");
+      }
+      else if (!Custom_App_Context.Switch_c_Notification_Status)
+      {
+        /* The central has not subscribed to the TX characteristic. Sending
+         * anyway would just be rejected by the stack. */
+        APP_DBG_MSG("-- NUS TX: notifications DISABLED, dropping %d byte(s)\n", len);
       }
       else
       {
-        Custom_App_Context.SW1_Status = 0;
-        // NotifyCharData[0] = 0x00;
-        NotifyCharData[0] = 0x01;     // (fix to match BLE_p2pServer)
-        NotifyCharData[1] = 0x00;
-      }
+        tBleStatus ret;
 
-      APP_DBG_MSG("-- CUSTOM APPLICATION SERVER: INFORM CLIENT BUTTON 1 PUSHED \n");
+        memcpy(NotifyCharData, Custom_App_Context.EchoBuf, len);
+
+        /* Length-aware send. Custom_STM_App_Update_Char() would always push
+         * SizeSwitch_C (153) bytes regardless of the real payload, which would
+         * pad every echo with stale buffer contents. */
+        ret = Custom_STM_App_Update_Char_Variable_Length(CUSTOM_STM_SWITCH_C,
+                                                         (uint8_t *)NotifyCharData,
+                                                         len);
+
+        if (ret == BLE_STATUS_SUCCESS)
+        {
+          APP_DBG_MSG("-- NUS TX: echoed %d byte(s)\n", len);
+        }
+        else
+        {
+          APP_DBG_MSG("-- NUS TX: echo FAILED, status 0x%02X, %d byte(s)\n", ret, len);
+        }
+      }
     }
-    else
-    {
-      APP_DBG_MSG("-- CUSTOM APPLICATION: CAN'T INFORM CLIENT -  NOTIFICATION DISABLED\n");
-    }     
-    // ============================
 
     /* USER CODE END Switch_c_NS_1*/
-
-    if (updateflag != 0)
-    {
-      Custom_STM_App_Update_Char(CUSTOM_STM_SWITCH_C, (uint8_t *)NotifyCharData);
-    }
 
     /* USER CODE BEGIN Switch_c_NS_Last*/
 
@@ -323,11 +387,33 @@ void Custom_Switch_c_Send_Notification(void *argument) // task process
 
 // ============================
 // From custom service example: https://wiki.st.com/stm32mcu/wiki/Connectivity:STM32WB_BLE_STM32CubeMX
+//
+// PHASE 2 (item A3): repurposed. Instead of toggling a button state, pressing
+// B1 queues a fixed test string on the TX characteristic. This proves the
+// device -> phone direction on its own, which is useful when the RX path is
+// the thing under suspicion.
+//
+// Called from interrupt context, so it only fills the buffer and signals.
 void P2PS_APP_SW1_Button_Action(void)
 {
+  static const char test_string[] = CUSTOM_APP_BUTTON_TEST_STRING;
+  uint8_t len = (uint8_t)(sizeof(test_string) - 1U);   /* drop the NUL */
+
+  if (len > CUSTOM_APP_ECHO_BUF_SIZE)
+  {
+    len = CUSTOM_APP_ECHO_BUF_SIZE;
+  }
+
+  /* Payload, then length, then signal - same ordering rule as the RX path. */
+  memcpy(Custom_App_Context.EchoBuf, test_string, len);
+  Custom_App_Context.EchoLen = len;
+
   // NOTE: Re-implemented with FreeRTOS
   // UTIL_SEQ_SetTask(1<<CFG_TASK_SW1_BUTTON_PUSHED_ID, CFG_SCH_PRIO_0);
-  osThreadFlagsSet(Custom_Switch_c_Send_NotificationId, 1);                  // signal thread (can be from interrupt)
+  if (Custom_Switch_c_Send_NotificationId != NULL)
+  {
+    osThreadFlagsSet(Custom_Switch_c_Send_NotificationId, 1);  // signal thread (can be from interrupt)
+  }
   return;
 }
 // ============================
