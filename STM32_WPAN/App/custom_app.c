@@ -56,6 +56,26 @@
 extern osThreadId_t Custom_Switch_c_Send_NotificationId;
 extern const osThreadAttr_t Custom_Switch_c_Send_Notification_attr;
 
+/* PHASE 2 constants.
+ *
+ * These are deliberately placed HERE and not in the "Private defines" (PD)
+ * USER CODE region further down: CubeMX emits the PD region *after* the
+ * Custom_App_Context_t typedef, and EchoBuf[] inside that struct needs the
+ * size at the point of declaration. Defining it in PD gives
+ * "error: 'CUSTOM_APP_ECHO_BUF_SIZE' undeclared here (not in a function)".
+ * The Includes region is the first USER CODE region in the file, so it is the
+ * correct home for anything the typedefs depend on.
+ */
+
+/* Largest payload that fits one notification PDU at CFG_BLE_MAX_ATT_MTU = 156
+ * (MTU minus 3 bytes of ATT overhead).
+ * Must track CUSTOM_STM_MAX_PAYLOAD_LEN in custom_stm.c. */
+#define CUSTOM_APP_ECHO_BUF_SIZE      153
+
+/* Text sent when the Nucleo B1 button is pressed - lets us prove the TX path
+ * without a phone attached. */
+#define CUSTOM_APP_BUTTON_TEST_STRING "FixaSpine BLE TX test\r\n"
+
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -100,14 +120,9 @@ typedef struct
 /* Private defines ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
 
-/* PHASE 2: largest payload that fits one notification PDU at
- * CFG_BLE_MAX_ATT_MTU = 156 (MTU - 3 bytes of ATT overhead).
- * Must track CUSTOM_STM_MAX_PAYLOAD_LEN in custom_stm.c. */
-#define CUSTOM_APP_ECHO_BUF_SIZE      153
-
-/* Text sent when the Nucleo B1 button is pressed - lets us prove the TX path
- * without a phone attached. */
-#define CUSTOM_APP_BUTTON_TEST_STRING "FixaSpine BLE TX test\r\n"
+/* PHASE 2 constants live in the USER CODE BEGIN Includes region above, because
+ * Custom_App_Context_t needs CUSTOM_APP_ECHO_BUF_SIZE and this region is
+ * emitted after that typedef. */
 
 /* USER CODE END PD */
 

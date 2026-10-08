@@ -43,12 +43,16 @@
 #include "custom_stm.h"
 
 /* USER CODE BEGIN Includes */
-/* PHASE 2: needed by the MTU / DLE tracing added below.
- * app_common.h brings in app_conf.h (CFG_BLE_MAX_ATT_MTU) and dbg_trace.h
- * brings in APP_DBG_MSG. Both are include-guarded, so this is safe even
- * though common_blesvc.h already pulls most of the BLE stack headers. */
-#include "app_common.h"
-#include "dbg_trace.h"
+/* PHASE 2: no extra includes needed here.
+ *
+ * Both CFG_BLE_MAX_ATT_MTU and APP_DBG_MSG, used by the MTU tracing added
+ * below, already arrive through the existing chain:
+ *   common_blesvc.h -> ble.h -> ble_conf.h -> app_conf.h
+ *
+ * An earlier revision added "app_common.h" here. Do not reinstate it: it
+ * redefines PAUSE(), which ble_common.h has already defined via
+ * common_blesvc.h, producing a '"PAUSE" redefined' warning.
+ */
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
