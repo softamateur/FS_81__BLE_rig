@@ -211,11 +211,22 @@ uint8_t index_con_int, mutex;
 
 /**
  * Advertising Data
+ *
+ * PHASE 2 (BLE_PHASE2_CODING_PLAN_2026-10-08.md, item B1): local name changed
+ * from "MyCST" to "FixaSpine" so the right device is obvious in a crowded
+ * scanner list. The AD length byte must equal 1 (AD type) + strlen(name), so
+ * 'FixaSpine' (9 chars) gives 10, and the array grows from 15 to 19 bytes.
+ * aci_gap_update_adv_data() is called with sizeof(a_AdvData), so no other
+ * change is needed.
+ *
+ * NOTE: the advertising *lifecycle* is deliberately NOT touched here. Adv_Mgr
+ * and Adv_Cancel remain dormant exactly as Tom left them (plan section 2A.10);
+ * arming FAST_ADV_TIMEOUT is a Phase 3 decision.
  */
-uint8_t a_AdvData[15] =
+uint8_t a_AdvData[19] =
 {
   2, AD_TYPE_TX_POWER_LEVEL, 0 /* -0.15dBm */, /* Transmission Power */
-  6, AD_TYPE_COMPLETE_LOCAL_NAME, 'M', 'y', 'C', 'S', 'T',  /* Complete name */
+  10, AD_TYPE_COMPLETE_LOCAL_NAME, 'F', 'i', 'x', 'a', 'S', 'p', 'i', 'n', 'e',  /* Complete name */
   4, AD_TYPE_MANUFACTURER_SPECIFIC_DATA, 0x30, 0x00, 0x00 /*  */,
 };
 
@@ -566,6 +577,28 @@ SVCCTL_UserEvtFlowStatus_t SVCCTL_App_Notification(void *p_Pckt)
 
         default:
           /* USER CODE BEGIN SUBEVENT_DEFAULT */
+
+          /* PHASE 2 (BLE_PHASE2_CODING_PLAN_2026-10-08.md, item A4) - record
+           * the Data Length Extension outcome.
+           *
+           * This trace lives here, not in custom_stm.c, because svc_ctl.c only
+           * dispatches vendor-specific GATT events (0x0Cxx) to registered
+           * service handlers - an LE meta event never reaches one.
+           *
+           * CFG_BLE_DATA_LENGTH_EXTENSION is enabled; this reports what the
+           * link actually settled on. Together with the negotiated ATT_MTU
+           * logged by custom_stm.c it explains whatever throughput figure we
+           * measure at the Phase 2 gate. */
+          if (p_meta_evt->subevent == HCI_LE_DATA_LENGTH_CHANGE_SUBEVT_CODE)
+          {
+            hci_le_data_length_change_event_rp0 *p_dle_evt;
+            p_dle_evt = (hci_le_data_length_change_event_rp0 *) p_meta_evt->data;
+            APP_DBG_MSG(">>== HCI_LE_DATA_LENGTH_CHANGE_SUBEVT_CODE\n");
+            APP_DBG_MSG("     - MaxTxOctets: %d  MaxTxTime: %d us\n",
+                        p_dle_evt->MaxTxOctets, p_dle_evt->MaxTxTime);
+            APP_DBG_MSG("     - MaxRxOctets: %d  MaxRxTime: %d us\n\r",
+                        p_dle_evt->MaxRxOctets, p_dle_evt->MaxRxTime);
+          }
 
           /* USER CODE END SUBEVENT_DEFAULT */
           break;
